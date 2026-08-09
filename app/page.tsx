@@ -9,9 +9,14 @@ import {
   isBoardComplete,
 } from "./lib/sudoku";
 
+import { initializePOWR } from "./lib/powr";
+
 const MAX_MISTAKES = 4;
 
 export default function Home() {
+  // POWR
+  const [powr, setPowr] = useState<any>(null);
+
   const [puzzle, setPuzzle] = useState<Board>([]);
   const [solution, setSolution] = useState<Board>([]);
   const [board, setBoard] = useState<Board>([]);
@@ -66,10 +71,36 @@ export default function Home() {
     setMessage("");
   }
 
+  // Start Sudoku
   useEffect(() => {
     startNewGame("medium");
   }, []);
 
+  // Initialize POWR
+  useEffect(() => {
+    async function initPOWR() {
+      const client = await initializePOWR();
+
+      if (client) {
+        setPowr(client);
+
+        console.log(
+          "POWR initialized successfully"
+        );
+
+        if (client.player) {
+          console.log(
+            "Player:",
+            client.player.username
+          );
+        }
+      }
+    }
+
+    initPOWR();
+  }, []);
+
+  // Timer
   useEffect(() => {
     if (paused || gameOver) {
       return;
@@ -115,8 +146,73 @@ export default function Home() {
     setWrongCell(null);
   }
 
-  function enterNumber(number: number): void {
-    if (paused || gameOver || !selected) {
+  // Submit completed Sudoku result to POWR
+  async function submitPOWRResult(): Promise<void> {
+    if (!powr) {
+      console.log(
+        "No POWR session. Result was not submitted."
+      );
+      return;
+    }
+
+    try {
+      const score = Math.max(
+        0,
+        1000 -
+        seconds * 2 -
+        mistakes * 100
+      );
+
+      const result = await powr.results.submit({
+        score,
+        win: true,
+        completed: true,
+        duration: seconds,
+
+        customStats: {
+          difficulty,
+          mistakes,
+          time: seconds,
+        },
+      });
+
+      console.log(
+        "POWR result submitted successfully:",
+        result
+      );
+
+      console.log(
+        `XP earned: ${result.xpEarned}`
+      );
+
+      console.log(
+        `Coins earned: ${result.coinsEarned}`
+      );
+
+      console.log(
+        `New level: ${result.newLevel}`
+      );
+
+      console.log(
+        `Streak: ${result.streak}`
+      );
+
+    } catch (error) {
+      console.error(
+        "Failed to submit POWR result:",
+        error
+      );
+    }
+  }
+
+  async function enterNumber(
+    number: number
+  ): Promise<void> {
+    if (
+      paused ||
+      gameOver ||
+      !selected
+    ) {
       return;
     }
 
@@ -124,7 +220,9 @@ export default function Home() {
 
     // Original puzzle cells cannot be changed.
     if (puzzle[row][col] !== 0) {
-      setMessage("This cell cannot be changed.");
+      setMessage(
+        "This cell cannot be changed."
+      );
       return;
     }
 
@@ -135,19 +233,57 @@ export default function Home() {
       setMistakes(newMistakes);
       setWrongCell([row, col]);
 
-      // Show wrong message
       setMessage("❌ Wrong number!");
 
-      // Remove red highlight after 500ms
       setTimeout(() => {
         setWrongCell(null);
       }, 500);
 
       // 4th mistake = Game Over
-      if (newMistakes >= MAX_MISTAKES) {
+      if (
+        newMistakes >= MAX_MISTAKES
+      ) {
         setGameOver(true);
         setShowGameOver(true);
         setMessage("");
+
+        // Submit failed game to POWR
+        if (powr) {
+          try {
+            const score = Math.max(
+              0,
+              1000 -
+              seconds * 2 -
+              newMistakes * 100
+            );
+
+            const result =
+              await powr.results.submit({
+                score,
+                win: false,
+                completed: false,
+                duration: seconds,
+
+                customStats: {
+                  difficulty,
+                  mistakes: newMistakes,
+                  time: seconds,
+                  reason: "too_many_mistakes",
+                },
+              });
+
+            console.log(
+              "POWR game-over result submitted:",
+              result
+            );
+          } catch (error) {
+            console.error(
+              "Failed to submit game-over result:",
+              error
+            );
+          }
+        }
+
         return;
       }
 
@@ -168,6 +304,14 @@ export default function Home() {
     if (isBoardComplete(newBoard)) {
       setGameOver(true);
       setShowCongratulations(true);
+
+      console.log(
+        "Sudoku completed in:",
+        formatTime(seconds)
+      );
+
+      // Submit successful result to POWR
+      await submitPOWRResult();
     }
   }
 
@@ -219,7 +363,7 @@ export default function Home() {
       ) {
         event.preventDefault();
 
-        enterNumber(
+        void enterNumber(
           Number(event.key)
         );
 
@@ -307,6 +451,9 @@ export default function Home() {
     puzzle,
     solution,
     mistakes,
+    difficulty,
+    seconds,
+    powr,
   ]);
 
   return (
@@ -582,7 +729,7 @@ export default function Home() {
               <button
                 key={number}
                 onClick={() =>
-                  enterNumber(number)
+                  void enterNumber(number)
                 }
                 disabled={
                   paused ||
